@@ -15,11 +15,6 @@ from octoprint.filemanager import FileDestinations
 import octoprint.util
 from octoprint.events import eventManager, Events
 
-__plugin_name__ = "flyingOctobear"
-__plugin_version__ = "0.1.0"
-__plugin_description__ = "Plugin for WIFI control FlyingBear Ghost4"
-
-
 class ERROR_CODE(IntEnum):
     OK = 0
     TIMEOUT = 1
@@ -39,16 +34,14 @@ class Ghost4Printer(octoprint.printer.PrinterInterface):
             Implementation of octoprint.printer.PrinterInterface
     """
 
-    def __init__(self, host, mocked=False):
-        self._logger = logging.getLogger("octoprint.plugins.flyingOctobear")
+    def __init__(self, host_get=None, logger=None):
+        self._logger = logger if logger is not None else logging.getLogger("octoprint.plugins.flyingOctobear")
 
-        # TODO ip by connect or settings
-        self.host = host
+        self.host_get = host_get
         self.session_id = -1
         self.port = None
         self.baudrate = None
         self.printer_profile = None
-        self._mocked = mocked
         self._callbacks = []
         self._state = "CLOSED"
         self._state_error = None
@@ -125,6 +118,12 @@ class Ghost4Printer(octoprint.printer.PrinterInterface):
             "autoconnect": settings().getBoolean(["serial", "autoconnect"])
         }
 
+    def host(self):
+        host = self.host_get()
+        if not host:
+            raise Exception("Printer host is not specified. Please input it into settings")
+        return host
+
     def _is_connected(self):
         return self.session_id != -1
 
@@ -150,17 +149,11 @@ class Ghost4Printer(octoprint.printer.PrinterInterface):
         self.baudrate = baudrate
         self.printer_profile = profile
 
-        if self._mocked:
-            eventManager().fire(Events.CONNECTED, dict(port=123, baudrate=250000))
-            self._set_state("OPERATIONAL")
-            return
-
         try:
             resp = self.make_request("connect")
         except Exception as e:
             self._set_error_state("Fail to connect to printer: {}".format(e))
-            self._logger.error("Fail to connect to printer.\n" +
-                               octoprint.util.get_exception_string())
+            self._logger.error("Fail to connect to printer", exc_info=sys.exc_info())
             return
 
         if resp.status_code != 200:
@@ -630,6 +623,7 @@ class Ghost4Printer(octoprint.printer.PrinterInterface):
             try:
                 resp = self.make_cmd_request("print_start", data=self._selected_file)
                 self.check_resp_status(resp)
+                self._set_state("PRINTING")
             except:
                 self._logger.error("Print start failed", exc_info=sys.exc_info())
                 eventManager().fire(Events.ERROR, dict(error="Print start failed"))
@@ -645,6 +639,7 @@ class Ghost4Printer(octoprint.printer.PrinterInterface):
         try:
             resp = self.make_cmd_request("pause_print")
             self.check_resp_status(resp)
+            self._set_state("PAUSED")
         except:
             self._logger.error("Print pause failed", exc_info=sys.exc_info())
             eventManager().fire(Events.ERROR, dict(error="Print pause failed"))
@@ -659,6 +654,7 @@ class Ghost4Printer(octoprint.printer.PrinterInterface):
         try:
             resp = self.make_cmd_request("resume_print")
             self.check_resp_status(resp)
+            self._set_state("PRINTING")
         except:
             self._logger.error("Print resume failed", exc_info=sys.exc_info())
             eventManager().fire(Events.ERROR, dict(error="Print resume failed"))
@@ -685,6 +681,7 @@ class Ghost4Printer(octoprint.printer.PrinterInterface):
         try:
             resp = self.make_cmd_request("cancel_print")
             self.check_resp_status(resp)
+            self._set_state("OPERATIONAL")
         except:
             self._logger.error("Print cancel failed", exc_info=sys.exc_info())
             eventManager().fire(Events.ERROR, dict(error="Print cancel failed"))
@@ -755,7 +752,8 @@ class Ghost4Printer(octoprint.printer.PrinterInterface):
         Returns:
                         (dict) The current temperatures.
         """
-        raise NotImplementedError()
+        with self._current_temp_lock:
+            return self._current_temperature
 
     def get_temperature_history(self, *args, **kwargs):
         """
@@ -938,7 +936,7 @@ class Ghost4Printer(octoprint.printer.PrinterInterface):
         return self.make_request("cmd", headers=dict(cmd=cmd), data=data)
 
     def make_request(self, path, headers=None, data=None):
-        url = "http://{}/{}".format(self.host, path)
+        url = "http://{}/{}".format(self.host(), path)
         if self.session_id != -1:
             if headers is None:
                 headers = {}
@@ -984,8 +982,6 @@ class Ghost4Printer(octoprint.printer.PrinterInterface):
             eventManager().fire(Events.FILE_DESELECTED)
 
     def get_sd_files(self, *args, **kwargs):
-        if self._mocked:
-            return [("file.gcode", 1000), ("file2.gcode", 2000), ("random.gjz", 1000)]
         if not self.is_sd_ready():
             return []
         try:
@@ -1039,32 +1035,7 @@ class Ghost4Printer(octoprint.printer.PrinterInterface):
     def _work_updates(self):
         while True:
             try:
-                if self._mocked:
-                    data = dict(
-                        connect_state=0,
-
-                        is_bed_heating=False,
-                        is_tool0_heating=False,
-                        is_tool1_heating=False,
-                        is_printing=False,
-                        is_paused=False,
-
-                        temp_bed_target=60,
-                        temp_bed=60,
-                        temp_tool0_target=200,
-                        temp_tool0=200,
-                        temp_tool1_target=0,
-                        temp_tool1=0,
-
-                        tool_count=1,
-                        current_tool=0,
-                        printing_progress=0,
-                        print_version_code=0,
-                        print_id=0,
-                        printing_filename="",
-                    )
-                else:
-                    data = self._request_status()
+                data = self._request_status()
                 if data is not None:
                     with self._data_lock:
                         self._data["state"] = dict(
@@ -1097,6 +1068,8 @@ class Ghost4Printer(octoprint.printer.PrinterInterface):
                         state = "PRINTING"
                     elif data["is_paused"]:
                         state = "PAUSED"
+                    elif not data["is_printing"] and not data["is_paused"]:
+                        state = "OPERATIONAL"
                     if state is not None and state != self.get_state_id():
                         self._set_state(state)
             except:
@@ -1158,15 +1131,23 @@ class Ghost4Printer(octoprint.printer.PrinterInterface):
         )
 
 
-class OctoBear(octoprint.plugin.OctoPrintPlugin):
-    def __init__(self):
-        # self.printer_ip = "127.0.0.1:111"  # TODO
-        self.printer_ip = "192.168.88.20"  # TODO
-        self.printer = Ghost4Printer(self.printer_ip)
-        # self.printer = Ghost4Printer(self.printer_ip, mocked=True)
+class OctoBear(octoprint.plugin.TemplatePlugin, octoprint.plugin.SettingsPlugin):
+    def printer_host(self):
+        return self._settings.get(["printer_host"])
+
+    def get_settings_defaults(self):
+        return dict(printer_host="")
+    
+    def get_template_vars(self):
+        return dict(printer_host=self._settings.get(["printer_host"]))
+    
+    def get_template_configs(self):
+        return [
+            dict(type="settings", custom_bindings=False)
+        ]
 
     def printer_factory_hook(self, components, *args, **kwargs):
-        return self.printer
+        return Ghost4Printer(self.printer_host)
 
 
 def __plugin_load__():
