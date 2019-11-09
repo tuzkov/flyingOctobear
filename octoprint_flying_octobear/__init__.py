@@ -6,7 +6,7 @@ import logging
 import threading
 import time
 import sys
-from enum import IntEnum
+# #from enum import IntEnum
 from datetime import datetime
 
 import octoprint.plugin
@@ -17,18 +17,18 @@ import octoprint.util
 from octoprint.events import eventManager, Events
 
 
-class ERROR_CODE(IntEnum):
-    OK = 0
-    TIMEOUT = 1
-    BUSY = 2
-    PARA_TOO_LONG = 3
-    MISSING_PARAMETERS = 4
-    FAILED = 5
-    UPLOAD_FAILED_ON_PRINTTING = 6
-    UPLOAD_FAILED_DISK_ERROR = 7
-    USER_CANCELED = 8
-    UNKNOW = 9
-    UPLOAD_FAILED_SIZE_NOT_MATCH = 10
+#class ERROR_CODE(IntEnum):
+#    OK = 0
+ #   TIMEOUT = 1
+  #  BUSY = 2
+   # PARA_TOO_LONG = 3
+    #MISSING_PARAMETERS = 4
+#    FAILED = 5
+ #   UPLOAD_FAILED_ON_PRINTTING = 6
+  #  UPLOAD_FAILED_DISK_ERROR = 7
+   # USER_CANCELED = 8
+    #UNKNOW = 9
+    #UPLOAD_FAILED_SIZE_NOT_MATCH = 10
 
 
 class Ghost4Printer(octoprint.printer.PrinterInterface):
