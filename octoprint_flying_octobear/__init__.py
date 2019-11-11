@@ -45,16 +45,30 @@ class Ghost4Printer(octoprint.printer.PrinterInterface):
         self.port = None
         self.baudrate = None
         self.printer_profile = None
+
+        """Valid axes identifiers."""
+        self.valid_axes = ("x", "y", "z", "e")
+
+        """Regex for valid tool identifiers."""
+        self.valid_tool_regex = re.compile(r"^(tool\d+)$")
+
+        """Regex for valid heater identifiers."""
+        self.valid_heater_regex = re.compile(r"^(tool\d+|bed|chamber)$")
+
         self._callbacks = []
         self._state = "CLOSED"
-        self._print_started = None
         self._state_error = None
+
+        self._print_started = None
         self._work = True
-        self._data_lock = threading.Lock()
-        self._control_lock = threading.Lock()
-        self._current_temp_lock = threading.Lock()
+
         self._selected_file_lock = threading.Lock()
         self._selected_file = None
+
+        self._control_lock = threading.Lock()
+        self._failed_attempts = 0
+
+        self._data_lock = threading.Lock()
         self._data = dict(state=dict(text=self.get_state_string(), flags=self._getStateFlags()),
                           job=dict(file=dict(name=None,
                                              path=None,
@@ -77,7 +91,9 @@ class Ghost4Printer(octoprint.printer.PrinterInterface):
         self._worker = threading.Thread(target=self._work_updates)
         self._worker.daemon = True
         self._worker.start()
+
         self._current_tool = "tool0"
+        self._current_temp_lock = threading.Lock()
         self._current_temperature = dict(
             tool0=dict(
                 actual=None,
@@ -89,14 +105,6 @@ class Ghost4Printer(octoprint.printer.PrinterInterface):
             )
         )
 
-        self.valid_axes = ("x", "y", "z", "e")
-        """Valid axes identifiers."""
-
-        self.valid_tool_regex = re.compile(r"^(tool\d+)$")
-        """Regex for valid tool identifiers."""
-
-        self.valid_heater_regex = re.compile(r"^(tool\d+|bed|chamber)$")
-        """Regex for valid heater identifiers."""
 
     @classmethod
     def get_connection_options(cls, *args, **kwargs):
@@ -1055,9 +1063,22 @@ class Ghost4Printer(octoprint.printer.PrinterInterface):
 
     def _work_updates(self):
         while True:
+            if not self._is_connected():
+                time.sleep(2)
+                continue
             try:
                 data = self._request_status()
+            except:
+                self._logger.exception(
+                    "exception inside worker", exc_info=sys.exc_info())
+                self._failed_attempts += 1
+                if self._failed_attempts > 5:
+                    self._logger.info("fail to connect to printer at %d attempts. Disconnecting", self._failed_attempts)
+                    self._failed_attempts = 0
+                    self.disconnect()                
+            try:
                 if data is not None:
+                    self._failed_attempts = 0
                     with self._data_lock:
                         if data["is_printing"]:
                             self._data["job"] = self._format_job(
@@ -1113,12 +1134,7 @@ class Ghost4Printer(octoprint.printer.PrinterInterface):
     def _request_status(self):
         if not self._is_connected():
             return
-        try:
-            resp = self.make_request("status")
-        except Exception as e:
-            self._logger.warn("Fail to connect to printer.",
-                              exc_info=sys.exc_info())
-            return
+        resp = self.make_request("status")
 
         if resp.status_code != 200:
             self._logger.warn(

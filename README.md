@@ -9,9 +9,11 @@ or manually using this URL:
 
     https://github.com/tuzkov/flyingOctobear/archive/master.zip
 
-**TODO:** Describe how to install your plugin, if more needs to be done than just installing it via pip or through
-the plugin manager.
+To install run pip at venv where Octoprint are installed. For example:
+```
+~/Octoprint/venv/bin/pip install https://github.com/tuzkov/flyingOctobear/archive/master.zip
+```
 
 ## Configuration
 
-**TODO:** Describe your plugin's configuration options (if any).
+Type your printer host or IP at plugin settings
